@@ -35,11 +35,16 @@ ffmpeg -i NoSeek.mp4 -r 1 -s 32x32 -frames:v 1 phash_source.png
 When the user checks the pHash, we compare the Hamming distance to all the other hashes, and report
 any that are near matches.
 
+The current list of keyboard bindings:
+b c d f h m o q r s v z
+Ctrl-h
+
 
 '''
 
 import subprocess
 import os
+import shutil
 import termios
 import fcntl
 import sys, tty
@@ -54,7 +59,7 @@ from random import randrange
 
 # misc settings
 vinfo_file = "vinfo.db"
-moveto_folders = ["FAVS"]  # defaults
+target_folders = ["FAVS"]  # defaults
 
 current_position = 0  # which file we are on
 
@@ -199,7 +204,7 @@ def FindSimilarPHashes(phash):
 
 def FindNextSetOfVisualDuplicates():
     global vinfo, workinglist, current_position
-    # pre-load all the int pHashes... TODO: do this part once after analyzing files.
+    # pre-load all the int pHashes...
     files = list(vinfo.keys())
     phashes = [int("0x"+vinfo[k]['ph'], base=16) for k in files]
     starting_position = current_position
@@ -596,7 +601,7 @@ def DrawHeader():
         print(f'Sort si(z)e: {sbsize}'.ljust(colwidth))
         
         MoveCursor(col2x, 4)
-        print(f'Filter (c)odec: {fbcodec}'.ljust(colwidth))
+        print(f'Filter c(o)dec: {fbcodec}'.ljust(colwidth))
         
         MoveCursor(col3x, 2)
         print(f'(S)earch term: {fbsearch}'.ljust(colwidth))
@@ -634,7 +639,7 @@ def DisplayHelp():
         "",
         "# Filtering and Searching",
         "S - Search for matching filenames (case insensitive)",
-        "C - Filter by video codec",
+        "O - Filter by video codec",
         "V - Find visually similar files based on image at 1 sec.",
         "    This searches the entire list of files, even if a",
         "    filter or search term is in effect. Results are",
@@ -645,16 +650,22 @@ def DisplayHelp():
         "",
         "# File commands",
         "<enter> - Play video file using mpv",
-        "<space> - Select file(s) (useful for deleting multiple files)",
+        "<space> - Select file(s) (for working with multiple files)",
         "<del> - Delete the file(s)",
         "    This command does not prompt you for confirmation,",
         "    so be careful!",
         "R - Rename file",
         "    This will not allow you to overwrite an existing",
         "    file of the target name.",
+        "C - Copy to named folder",
+        "    Allows user to select a folder (or specify an addition",
+        "    to the list) to copy the file(s) into.",
         "M - Move to named folder",
         "    Allows user to select a folder (or specify an addition",
         "    to the list) to move the file into.",
+        "T - Trim the video file",
+        "    Allows user to trim a video file based on start/stop",
+        "    times. Creates a new file.",
         "",
         "# Misc",
         "Ctrl-H - View this help dialog",
@@ -753,8 +764,32 @@ def VideoInfoString(key):
 
 def PlayVideo(file):
     # launch mpv
-    cmd = ['mpv', file]
+    cmd = ['mpv', file, '--keep-open']
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def TrimVideo(file):
+    # ffmpeg -i input.mp4 -ss 00:05:10 -to 00:15:30 -c:v copy -c:a copy output2.mp4
+    start_time = InputBox("Start time as HH:MM:SS ", "")
+    if not start_time:
+        return False
+    stop_time = InputBox("Stop time as HH:MM:SS ", "")
+    if not stop_time:
+        return False
+    
+    f = file.rsplit('.', 1)
+    outputfile = 'NONE'
+    while outputfile == 'NONE':
+        outputfile = InputBox("Name of output file:", f[0] + ' (trimmed).' + f[1])
+        if outputfile == '':
+            return False
+        if os.path.exists(outputfile):
+            MakeSelection("That file name already exists!", ['Ok'], 36, 5)
+            outputfile = 'NONE'
+    
+    cmd = ['ffmpeg', '-i', file, '-ss', start_time, '-to', stop_time, '-c:v', 'copy', '-c:a', 'copy', outputfile]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return outputfile
 
 
 def FilterAndSortFiles():
@@ -902,7 +937,7 @@ while True:
         fbsearch = InputBox("Enter search term:", fbsearch)
         FilterAndSortFiles()
         DrawHeader()
-    elif key == 'c' and not in_sublist:  # filter by codec
+    elif key == 'o' and not in_sublist:  # filter by codec
         fbcodec = MakeSelection("Select codec",['(none)'] + used_codecs, 25, 10)
         if fbcodec == '(none)':
             fbcodec = ''
@@ -951,6 +986,18 @@ while True:
                 filelist.remove(f)
                 workinglist.remove(f)
                 del vinfo[f]
+                if in_sublist:  # we're doing operations to files in the sublist; update the main list, too.
+                    try:
+                        s_fileselection.remove(f)
+                    except:
+                        pass  # ignore any errors
+                    try:
+                        s_workinglist.remove(f)
+                    except:
+                        pass  # ignore any errors
+                    s_wc = len(s_workinglist)
+                    if s_current_position >= s_wc:  # check that stored current position is still valid
+                        s_current_position = s_wc - 1
             fileselection.clear()
         else:  # just delete the current one
             file = workinglist[current_position]
@@ -958,24 +1005,90 @@ while True:
             filelist.remove(file)
             workinglist.remove(file)
             del vinfo[file]
-        if in_sublist:  # we're doing operations to files in the sublist; update the main list, too.
-            try:
-                s_fileselection.remove(file)
-            except:
-                pass  # ignore any errors
-            try:
-                s_workinglist.remove(file)
-            except:
-                pass  # ignore any errors
-            s_wc = len(s_workinglist)
-            if s_current_position >= s_wc:  # check that stored current position is still valid
-                s_current_position = s_wc - 1
+            if in_sublist:  # we're doing operations to files in the sublist; update the main list, too.
+                try:
+                    s_fileselection.remove(file)
+                except:
+                    pass  # ignore any errors
+                try:
+                    s_workinglist.remove(file)
+                except:
+                    pass  # ignore any errors
+                s_wc = len(s_workinglist)
+                if s_current_position >= s_wc:  # check that stored current position is still valid
+                    s_current_position = s_wc - 1
             
         file_count = len(filelist)
         working_count = len(workinglist)
         WriteVinfoDB()
         if current_position >= working_count:  # check that current position is still valid
             current_position = working_count - 1
+    elif key == "c":  # copy the file(s)
+        # show the list of folders available
+        target_folder = MakeSelection("Select folder", target_folders + ['(new)'], 25, 10)
+        if target_folder == '':
+            DrawScreen()
+            continue
+        if target_folder == '(new)':
+            target_folder = InputBox("Enter name of new folder:","")
+            if target_folder == '':
+                DrawScreen()
+                continue
+            target_folders.append(target_folder)   # save for later
+        os.makedirs(target_folder, exist_ok=True)  # create the folder if it doesn't exist
+        
+        # check if files are selected
+        if len(fileselection) > 0:
+            for f in fileselection:
+                base = os.path.basename(f)
+                newfile = os.path.join(target_folder, base)
+                if newfile == f:  # file already exists in target location
+                    continue
+                if os.path.exists(newfile):
+                    MakeSelection("That destination file name already exists!", ['Ok'], 36, 5)
+                    DrawScreen()
+                    continue
+                # copy the file
+                shutil.copy(f, newfile)
+
+                # copy the info/lists for the copied files
+                filelist.append(newfile)
+                workinglist.append(newfile)
+                vinfo[newfile] = vinfo[f]
+                if in_sublist:  # we're doing operations to files in the sublist; update the main list, too.
+                    try:
+                        s_workinglist.append(newfile)
+                    except:
+                        pass  # ignore any errors
+                    s_wc = len(s_workinglist)
+            fileselection.clear()
+        else:  # just copy the current one
+            file = workinglist[current_position]
+            base = os.path.basename(file)
+            newfile = os.path.join(target_folder, base)
+            if newfile == file:  # file already exists in target location
+                continue
+            if os.path.exists(newfile):
+                MakeSelection("That destination file name already exists!", ['Ok'], 36, 5)
+                DrawScreen()
+                continue
+            
+            # copy the file
+            shutil.copy(file, newfile)
+            
+            filelist.append(newfile)
+            workinglist.append(newfile)
+            vinfo[newfile] = vinfo[file]
+            if in_sublist:  # we're doing operations to files in the sublist; update the main list, too.
+                try:
+                    s_workinglist.append(newfile)
+                except:
+                    pass  # ignore any errors
+                s_wc = len(s_workinglist)
+
+        file_count = len(filelist)
+        working_count = len(workinglist)
+        WriteVinfoDB()
     elif key == "r":  # rename the file
         file = workinglist[current_position]
         dir = os.path.dirname(file)
@@ -1006,7 +1119,7 @@ while True:
         WriteVinfoDB()
     elif key == "m":  # move to named folder
         # show the list of folders available
-        target_folder = MakeSelection("Select folder", moveto_folders + ['(new)'], 25, 10)
+        target_folder = MakeSelection("Select folder", target_folders + ['(new)'], 25, 10)
         if target_folder == '':
             DrawScreen()
             continue
@@ -1015,7 +1128,7 @@ while True:
             if target_folder == '':
                 DrawScreen()
                 continue
-            moveto_folders.append(target_folder)   # save for later
+            target_folders.append(target_folder)   # save for later
 
         file = workinglist[current_position]
         base = os.path.basename(file)
@@ -1061,6 +1174,26 @@ while True:
         current_position = randrange(0, working_count)
     elif key == "ctrl-h":
         DisplayHelp()
+    elif key == "t":  # trim video
+        outputfile = TrimVideo(workinglist[current_position])
+        if outputfile == False:
+            continue
+        MakeSelection("File was trimmed.", ['Ok'], 36, 5)
+        
+        filelist.append(outputfile)
+        workinglist.append(outputfile)
+        vinfo[outputfile] = GetVideoInfo(outputfile)  # calc new vinfo for that file.
+        
+        if in_sublist:  # we're doing operations to files in the sublist; update the main list, too.
+            try:
+                s_workinglist.append(outputfile)
+            except:
+                pass  # ignore any errors
+            s_wc = len(s_workinglist)
+
+        file_count = len(filelist)
+        working_count = len(workinglist)
+        WriteVinfoDB()
     else:
         continue  # don't bother to redraw the screen - nothing has changed
     DrawScreen()
