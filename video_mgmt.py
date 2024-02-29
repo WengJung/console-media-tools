@@ -1,4 +1,10 @@
 #!/usr/bin/env python
+"""
+TODO:
+    Add a view count to the database and allow users to sort by the view count.
+    Make the sorting, searching, and filtering options be hidden until active.
+"""
+
 '''
 Tool for managing video files.
 This script walks the current folder and all subfolders to get a list of all files.
@@ -36,7 +42,7 @@ When the user checks the pHash, we compare the Hamming distance to all the other
 any that are near matches.
 
 The current list of keyboard bindings:
-b c d f h m o q r s v z
+b c d f h m o q r s t v z p
 Ctrl-h
 
 
@@ -176,7 +182,17 @@ def GetPHashForFrame(vid_file, frameno):
     median = numpy.median(coefs)
     h = sum((1<<i) for i,j in enumerate(coefs) if j > median)  # create the pHash bit by bit
     return ("%013x" % h)  # 49 bits can only give us up to 0x1FFFFFFFFFFFFF
-    
+
+
+def HammingDistance(n1, n2):
+    diff = n1 ^ n2
+    count = 0
+    while diff > 0:  # check all the bits
+        if diff & 1:
+            count += 1
+        diff = diff >> 1
+    return count
+
 
 def IsUnderHammingDistance(n1, n2, maxamt):
     diff = n1 ^ n2
@@ -196,9 +212,12 @@ def FindSimilarPHashes(phash):
     ph = int("0x"+phash, base=16)
     files = list(vinfo.keys())
     phashes = [int("0x"+vinfo[k]['ph'], base=16) for k in files]
+    hdists = []
     for idx, f in enumerate(files):
-        if(IsUnderHammingDistance(ph,phashes[idx], HAMM_DIST)):
-            new_list.append(f)
+        hd = HammingDistance(ph,phashes[idx])
+        hdists.append((hd,f))
+    hdists.sort(key=lambda x:x[0])
+    new_list = [i[1] for i in hdists[:10]]
     return new_list
 
 
@@ -222,6 +241,27 @@ def FindNextSetOfVisualDuplicates():
             return new_list
     return []   # empty list means there are no more duplicates from current_position through to the end.
     
+
+def FindMostVisuallySimilar(ph):
+    global vinfo, workinglist, current_position
+    # pre-load all the int pHashes...
+    files = list(vinfo.keys())
+    phashes = [int("0x"+vinfo[k]['ph'], base=16) for k in files]
+    starting_position = current_position
+    for i,f in enumerate(workinglist[starting_position:]):
+        fph = int("0x"+vinfo[f]['ph'], base=16)
+        # how many others are visually similar?
+        new_list = []
+        for i2, lph in enumerate(phashes):
+            if(IsUnderHammingDistance(fph, lph, HAMM_DIST)):
+                new_list.append(files[i2])
+        # update the UI
+        current_position = i + starting_position
+        DrawScreen()
+        if len(new_list) > 1:  # we always match with ourselves
+            return new_list
+    return []   # empty list means there are no more duplicates from current_position through to the end.
+
 
 def getch():
     fd = sys.stdin.fileno()
@@ -488,7 +528,79 @@ def MakeSelection(title, itemlist, WWIDTH, WHEIGHT):
             MoveCursor(start_x + 1, start_y + 1 + i)
             cprint(itemstr.ljust(WWIDTH), color)
     return ''
+
+
+def OrganizeOptions(title, itemlist, WWIDTH, WHEIGHT):
+    sidemargin = 2
+    start_x, start_y = DrawWindow(title, WWIDTH + 2 + (sidemargin*2), WHEIGHT + 2)
+    start_x += sidemargin  # allow for the selection indicator
+    current_item = 0
+    item_count = len(itemlist)
+    selected = -1  # start with no item selected
+    first = True
+    while True:
+        if first:   # kludge to make sure we draw the options first.
+            first = False
+        else:
+            key = getKey().lower()
+            if key == "up":
+                if current_item > 0:
+                    # if selected, first move it up in the list
+                    if selected >= 0:
+                        itemlist.insert(selected - 1, itemlist.pop(selected))
+                        selected -= 1
+                    current_item -= 1
+            elif key == "down":
+                if current_item < item_count - 1:
+                    # if selected, first move it down in the list
+                    if selected >= 0:
+                        itemlist.insert(selected + 1, itemlist.pop(selected))
+                        selected += 1
+                    current_item += 1
+            elif key == '\r':
+                return itemlist
+            elif key == 'esc':
+                return False
+            elif key == ' ':
+                # set the selection
+                if selected >= 0:
+                    selected = -1
+                else:
+                    selected = current_item
+            else:
+                continue
+        # drawing section
+        if WHEIGHT >= item_count:  # all on one page. Easy.
+            start_idx = 0
+            end_idx = item_count
+        else:
+            start_idx = int(current_item - math.floor(WHEIGHT / 2))
+            if start_idx < 0:
+                start_idx = 0
+                end_idx = start_idx + WHEIGHT
+            else:
+                end_idx = int(current_item + math.ceil(WHEIGHT / 2))
+                if end_idx > item_count:
+                    end_idx = item_count
+                    start_idx = end_idx - WHEIGHT
     
+        for i, item in enumerate(itemlist[start_idx:end_idx]):
+            color = NORMAL_TEXT
+            if start_idx + i == current_item:
+                color = HIGHLIGHT_TEXT
+            if len(item) > WWIDTH:
+                itemstr = item[:WWIDTH-3] + "..."
+            else:
+                itemstr = item
+            # print(" " + selected + " ", end = '')
+            if start_idx + i == selected:
+                itemstr = '> ' + itemstr
+            else:
+                itemstr = '  ' + itemstr
+            MoveCursor(start_x - 1, start_y + 1 + i)
+            cprint(itemstr.ljust(WWIDTH), color)
+    return False  # should never get here
+
     
 def InfoBox(title, textrows, WWIDTH, WHEIGHT):
     start_x, start_y = DrawWindow(title, WWIDTH + 2, WHEIGHT + 2)
@@ -647,6 +759,8 @@ def DisplayHelp():
         "    using a perceptive hashing function that should",
         "    identify similar files regardless of quality and",
         "    resolution.",
+        "P - Search by pHash.",
+        "    Finds the top 10 video files with the closest pHashes.",
         "",
         "# File commands",
         "<enter> - Play video file using mpv",
@@ -666,6 +780,9 @@ def DisplayHelp():
         "T - Trim the video file",
         "    Allows user to trim a video file based on start/stop",
         "    times. Creates a new file.",
+        "J - Join video file",
+        "    Allows user to join the selected video files into one.",
+        "    The source videos must be the same size, codec, etc.",
         "",
         "# Misc",
         "Ctrl-H - View this help dialog",
@@ -789,6 +906,40 @@ def TrimVideo(file):
     
     cmd = ['ffmpeg', '-i', file, '-ss', start_time, '-to', stop_time, '-c:v', 'copy', '-c:a', 'copy', outputfile]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return outputfile
+
+
+def JoinVideo(files):
+    # prompt user to arrange files in order
+    height = len(fileselection)
+    if height > 15:
+        height = 15
+    files = OrganizeOptions("Organize files in order: (space to select)", files, 45, height)
+    if files == False:  # user escaped
+        return 'ESC'
+    
+    # Write the list of filenames to _concat_list.txt
+    listfile = '_concat_list.txt'
+    with open(listfile, 'w') as f:
+        for _file in files:
+            f.write(f"file '{_file}'\n")
+    
+    f = files[0].rsplit('.', 1)
+    outputfile = 'NONE'
+    while outputfile == 'NONE':
+        outputfile = InputBox("Name of output file:", f[0] + ' (joined).' + f[1])
+        if outputfile == '':
+            os.remove(listfile)
+            return 'ESC'
+        if os.path.exists(outputfile):
+            MakeSelection("That file name already exists!", ['Ok'], 36, 5)
+            outputfile = 'NONE'
+
+    # ffmpeg -safe 0 -f concat -i _concat_list.txt -c copy output.mp4    
+    cmd = ['ffmpeg', '-safe', '0', '-f', 'concat', '-i', listfile, '-c', 'copy', outputfile]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    os.remove(listfile)
     return outputfile
 
 
@@ -981,6 +1132,11 @@ while True:
     elif key == "del":  # delete the file(s)
         # check if files are selected
         if len(fileselection) > 0:
+            # confirm that the user wants to delete multiple files
+            r = MakeSelection("Delete multiple files?", ["Yes","No"], 24, 2)
+            if r != "Yes":
+                DrawScreen()
+                continue
             for f in fileselection:
                 os.remove(f)
                 filelist.remove(f)
@@ -1170,6 +1326,22 @@ while True:
         fileselection.clear()
         current_position = 0
         DrawHeader()
+    elif key == "p" and not in_sublist:  # find top 10 closest pHash matches
+        ph = InputBox("Enter pHash to search for:", "")
+        if ph == '':
+            DrawScreen()
+            continue
+        if len(workinglist) == 0:
+            MakeSelection("No videos to check!", ['Ok'], 42, 1)
+            DrawScreen()
+            continue
+        closest_list = FindSimilarPHashes(ph)
+        PushWorkingList()
+        workinglist = closest_list
+        working_count = len(workinglist)
+        fileselection.clear()
+        current_position = 0
+        DrawHeader()
     elif key == "?":  # select random item from list
         current_position = randrange(0, working_count)
     elif key == "ctrl-h":
@@ -1178,11 +1350,61 @@ while True:
         outputfile = TrimVideo(workinglist[current_position])
         if outputfile == False:
             continue
-        MakeSelection("File was trimmed.", ['Ok'], 36, 5)
         
         filelist.append(outputfile)
         workinglist.append(outputfile)
         vinfo[outputfile] = GetVideoInfo(outputfile)  # calc new vinfo for that file.
+        MakeSelection("File was trimmed.", ['Ok'], 36, 5)
+        
+        if in_sublist:  # we're doing operations to files in the sublist; update the main list, too.
+            try:
+                s_workinglist.append(outputfile)
+            except:
+                pass  # ignore any errors
+            s_wc = len(s_workinglist)
+
+        file_count = len(filelist)
+        working_count = len(workinglist)
+        WriteVinfoDB()
+    elif key == "j":  # join video
+        # check if we have multiple files selected
+        if len(fileselection) < 2:
+            MakeSelection("No files selected to join.", ['Ok'], 36, 5)
+            continue  # no files selected
+        # check if they're all the same size and type
+        _w = None
+        _h = None
+        _c = None
+        different = 0
+        for f in fileselection:
+            if _w is None:
+                _w = vinfo[f]['w']
+                _h = vinfo[f]['h']
+                _c = vinfo[f]['c']
+            else:
+                if _w != vinfo[f]['w'] or \
+                    _h != vinfo[f]['h'] or \
+                    _c != vinfo[f]['c']:
+                    different += 1
+        if different > 0:
+            MakeSelection("Files are too different to join!", ['Ok'], 40, 5)
+            DrawScreen()
+            continue
+
+        outputfile = JoinVideo(fileselection)
+        if outputfile == False:
+            MakeSelection("Unable to join files.", ['Ok'], 36, 5)
+            DrawScreen()
+            continue
+        elif outputfile == 'ESC':  # user escaped
+            DrawScreen()
+            continue
+
+        filelist.append(outputfile)
+        workinglist.append(outputfile)
+        vinfo[outputfile] = GetVideoInfo(outputfile)  # calc new vinfo for that file.
+        MakeSelection("Files were joined.", ['Ok'], 36, 5)
+        fileselection = []
         
         if in_sublist:  # we're doing operations to files in the sublist; update the main list, too.
             try:

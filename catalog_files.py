@@ -312,7 +312,7 @@ def MakeSelection(title, itemlist, WWIDTH, WHEIGHT):
 def DrawHeader():
     global HEADER_SIZE, HIGHLIGHT_TEXT, SCREEN_X
     centerprint("REVIEW DUPLICATES", 1, HIGHLIGHT_TEXT)
-
+    
     MoveCursor(30, 2)
     print(f'(F)avor this path/file'.ljust(25))
 
@@ -356,8 +356,7 @@ def CountDupeIndexes():
 def DrawMainArea():
     global duplicates, dupe_count, SCREEN_Y, HEADER_SIZE, MAX_FNAME_LENGTH, NUM_FILES_PER_PAGE
     global current_position
-
-    MoveCursor(1, HEADER_SIZE+1)
+    
     # figure out which files we want to display
     if NUM_FILES_PER_PAGE >= dupe_count:  # all on one page. Easy.
         start_idx = 0
@@ -366,35 +365,37 @@ def DrawMainArea():
         start_idx = int(current_position - math.floor(NUM_FILES_PER_PAGE / 2))
         if start_idx < 0:
             start_idx = 0
-        end_idx = start_idx + NUM_FILES_PER_PAGE
-        if end_idx >= dupe_count:
-            end_idx = dupe_count - 1
-            start_idx = end_idx - NUM_FILES_PER_PAGE
+            end_idx = start_idx + (NUM_FILES_PER_PAGE - 1)
+        else:
+            end_idx = int(current_position + math.ceil(NUM_FILES_PER_PAGE / 2)) - 1
+            if end_idx >= dupe_count:
+                end_idx = dupe_count - 1
+                start_idx = end_idx - (NUM_FILES_PER_PAGE - 1)
     
     # get the 2D indexes
     (si1, si2) = DupeIndexTo2D(start_idx)
     (ei1, ei2) = DupeIndexTo2D(end_idx)
 
-    """
-    print(f'SCREEN_Y:{SCREEN_Y}')
-    print(f'NUM_FILES_PER_PAGE:{NUM_FILES_PER_PAGE}')
-    print(f'dupe_count:{dupe_count}')
-    print(f'start_idx:{start_idx}')
-    print(f'end_idx:{end_idx}')
-    print(f'current_position:{current_position}')
-    print(f'si1,si2:{si1},{si2}')
-    print(f'ei1,ei2:{ei1},{ei2}')
-    """
+
+    #MoveCursor(1, 1)
+    #print(f'SCREEN_Y:{SCREEN_Y}')
+    #print(f'NUM_FILES_PER_PAGE:{NUM_FILES_PER_PAGE}')
+    #print(f'start_idx:{start_idx}')
+    #print(f'end_idx:{end_idx}')
+    #print(f'si1,si2:{si1},{si2}')
+    #print(f'ei1,ei2:{ei1},{ei2}')
+    
+    MoveCursor(1, HEADER_SIZE+1)
     
     row = 0
     duplicates_slice = duplicates[si1:ei1+1]
     for i, dupes in  enumerate(duplicates_slice):
         for i2, d in enumerate(dupes):
             #print(f'i,i2:{i},{i2}')
-            if i == 0 and i2 < si2:  # ignore out of view entries
+            if i == 0 and i2 < si2:  # ignore out of view entries at the top
                 #print("Under!")
                 continue
-            if i == len(duplicates_slice) - 1 and i2 >= ei2:
+            if i == len(duplicates_slice) - 1 and i2 >= ei2 + 1:
                 #print("Over!")
                 continue
             color = NORMAL_TEXT
@@ -698,8 +699,9 @@ if len(to_be_removed) > 0:
     if choice[0] == 'y':
         # do actual file deletion
         for f in to_be_removed:
-            os.remove(f)
-            print("Removed: ", f)
+            if os.path.exists(f):
+                os.remove(f)
+                print("Removed: ", f)
         print("Finished removing duplicate files.")
     else:
         print("No duplicate files were deleted.")
